@@ -1,4 +1,3 @@
-
 name: Build Kana Flick APK
 
 on:
@@ -27,10 +26,12 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
 
       - name: Install Android 34 SDK
         run: |
-          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+          sdkmanager --install "platforms;android-34" "build-tools;34.0.0"
 
       - name: Build debug APK
         run: gradle --no-daemon :app:assembleDebug
