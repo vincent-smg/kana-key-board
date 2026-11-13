@@ -20,6 +20,11 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
@@ -73,7 +78,7 @@ jobs:
           cp "$GITHUB_WORKSPACE/mocz/mozc-master/LICENSE" "$GITHUB_WORKSPACE/app/main/assets/MOZC-LICENSE.txt"
 
       - name: Build debug APK
-        run: ./gradlew --no-daemon :app:assembleDebug
+        run: gradle --no-daemon :app:assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
