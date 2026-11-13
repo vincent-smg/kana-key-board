@@ -60,7 +60,8 @@ jobs:
         working-directory: mocz/mozc-master/src
         run: |
           bazelisk build --config oss_android package --config release_build \
-            //android/jni:native_libs \
+            //android/jni:native_libs
+          bazelisk build --config oss_linux --config release_build \
             //data_manager/oss:mozc_dataset_for_oss
           mkdir -p "$GITHUB_WORKSPACE/app/main/jniLibs" "$GITHUB_WORKSPACE/app/main/assets"
           unzip -q bazel-bin/android/jni/native_libs.zip -d /tmp/mozc-native

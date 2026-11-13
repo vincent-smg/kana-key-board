@@ -49,7 +49,8 @@ jobs:
         working-directory: mocz/mozc-master/src
         run: |
           bazelisk build --config oss_android package --config release_build \
-            //android/jni:native_libs \
+            //android/jni:native_libs
+          bazelisk build --config oss_linux --config release_build \
             //data_manager/oss:mozc_dataset_for_oss
 
       - name: Package Mozc integration files
