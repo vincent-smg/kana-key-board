@@ -11,6 +11,7 @@ class JapaneseConversionManager(private val dictionary: Dictionary) {
         val hiragana = Kana.toHira(reading)
         if (hiragana.isBlank()) return emptyList()
         return linkedSetOf(hiragana).apply {
+            addAll(dictionary.convert(hiragana, limit))
             addAll(dictionary.exact(hiragana))
             addAll(dictionary.predict(hiragana, limit))
         }.take(limit)
