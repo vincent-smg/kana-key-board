@@ -19,7 +19,6 @@ android {
         getByName("main") {
             manifest.srcFile("AndroidManifest.xml")
             java.srcDirs("java")
-            proto.srcDirs("proto")
             assets.srcDirs("assets")
             jniLibs.srcDirs("jniLibs")
             res.srcDirs("res")
