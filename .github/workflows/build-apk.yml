@@ -8,6 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Check out project
         uses: actions/checkout@v4
@@ -24,12 +25,13 @@ jobs:
           gradle-version: '8.7'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
 
       - name: Install Android 34 SDK
         run: |
-          yes | sdkmanager --licenses || true
-          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+          sdkmanager --install "platforms;android-34" "build-tools;34.0.0"
 
       - name: Build debug APK
         run: gradle --no-daemon :app:assembleDebug
@@ -38,5 +40,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: KanaFlick-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: app/main/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error

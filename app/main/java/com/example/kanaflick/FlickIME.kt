@@ -14,8 +14,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
-import java.io.File
 import android.widget.*
+import java.io.File
 
 class Th(val bg: Int, val key: Int, val alt: Int, val text: Int, val sub: Int, val acc: Int)
 
@@ -72,11 +72,15 @@ class FlickIME : InputMethodService() {
             InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD, InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
             InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS, InputType.TYPE_TEXT_VARIATION_URI)
         val previousClipboardAllowed = clipboardAllowed
+        val previousMode = mode
         clipboardAllowed = cls == InputType.TYPE_CLASS_TEXT && v !in plain
         if (cls == InputType.TYPE_CLASS_NUMBER || cls == InputType.TYPE_CLASS_PHONE) clipboardAllowed = false
         if (clipboardAllowed) clipboardHistory.startObserving() else clipboardHistory.stopObserving()
         if (restarting) {
-            if (previousClipboardAllowed != clipboardAllowed && ::bar.isInitialized) setInputView(buildRoot())
+            if (!clipboardAllowed && mode == 4) mode = returnMode
+            if ((previousClipboardAllowed != clipboardAllowed || previousMode != mode) && ::bar.isInitialized) {
+                setInputView(buildRoot())
+            }
             return
         }
 
@@ -150,8 +154,7 @@ class FlickIME : InputMethodService() {
         content = FrameLayout(this)
         root.addView(barRow, LinearLayout.LayoutParams(MP, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(content, LinearLayout.LayoutParams(MP, dp(prefs.keyH * 4 + 8)))
-        showMode(); updateBar()
-        return root
+        showMode(); updateBar(); return root
     }
 
     private fun barBtn(t: String, f: () -> Unit) = TextView(this).apply {
@@ -219,7 +222,8 @@ class FlickIME : InputMethodService() {
         add(kv("☆123", 1, true) { mode = 2; symPage = 0; showMode() }, 0, 1)
         add(kv(if (kata) "あ" else "ア", 1, true) { kata = !kata; showMode() }, 0, 2)
         add(kv("ABC", 1, true) { mode = 1; showMode() }, 0, 3)
-        add(kv("小゛゜", 1, true) { modify() }, 1, 3)
+        add(kv("☺", 1, true) { returnMode = mode; mode = 5; showMode() }, 1, 3)
+        add(kv("小゛゜", 1, true) { modify() }, 2, 3)
         add(kv("⌫", 1, true, true) { backspace() }, 4, 0)
         add(kv("␣", 1, true) { space() }, 4, 1)
         add(kv("⏎", 2, true) { enter() }, 4, 2, 2)
@@ -242,8 +246,6 @@ class FlickIME : InputMethodService() {
 
     private fun keys(s: String, f: (Char) -> Unit, upper: Boolean = false) =
         s.map { ch -> Pair<View, Float>(kv(if (upper) ch.uppercase() else ch.toString()) { f(ch) }, 1f) }.toTypedArray()
-
-    private fun bottom(vararg extra: Pair<View, Float>): LinearLayout = rowOf(*extra)
 
     private fun qwertyView(): View {
         val sp = Pair<View, Float>(View(this), 0.5f)
@@ -277,8 +279,8 @@ class FlickIME : InputMethodService() {
     }
 
     private val emoji = ("😀 😃 😄 😁 😆 😅 😂 🤣 😊 😇 🙂 😉 😍 🥰 😘 😋 😛 😜 🤪 😎 🤩 🥳 😏 😒 😞 😔 😟 😕 🙁 😣 😖 😫 " +
-        "😩 🥺 😢 😭 😤 😠 😡 🤯 😳 🥵 🥶 😱 😨 😰 😓 🤗 🤔 🤭 🤫 🙄 😬 😴 🤤 😷 🤒 🤕 🤢 🥴 😵 🤠 👍 👎 👏 🙌 🙏 💪 👋 " +
-        "👌 ❤️ 🧡 💛 💚 💙 💜 🖤 💔 ✨ 🔥 ⭐ 🌸 🎉 🎌 🍣 🍜 🍙 🐱 🐶 🌈 ☀️ 🌙").split(" ")
+        "😩 🥺 😢 😭 😤 😠 😡 🤯 😳 🥵 🥶 😱 😨 😰 😓 🤗 🤔 🤭 🤫 🙄 😬 😴 🤤 😷 🤒 🤕 🤢 🥴 😵 🤠 👍 👎 👏 🙌 🙏 💪 👋 🤝 ✨ 🔥 ⭐ 🌸 🎉 🎌 " +
+        "🍣 🍜 🍙 🐱 🐶 🐼 🐰 🦊 🐵 🐻 🌈 ☀️ 🌙 🌊 🚀 🧳 🧠 💡 💊 🧸 🧁 🍰 🍕 🍔 🍟 🥐 🥨 🍦 🍉 🍓 🍇 🥝 🥑 🍋 🍊 🍍 🥥 🥭").split(" ")
 
     private fun emojiView(): View {
         val sv = ScrollView(this)
@@ -442,6 +444,7 @@ class FlickIME : InputMethodService() {
         if (dict.has(w)) prefs.bump(w)
         comp.setLength(0); rom.setLength(0)
         if (expanded) { expanded = false; expBtn.text = "▾"; showMode() }
+        if (mode == 4 || mode == 5) closePanel()
         updateBar()
     }
 
@@ -506,8 +509,10 @@ class FlickIME : InputMethodService() {
 
     private fun space() {
         if (comp.isEmpty() && rom.isEmpty()) { currentInputConnection?.commitText(" ", 1); return }
-        val base = candidates(0).firstOrNull() ?: return
-        choose(dict.exact(Kana.toHira(base)).firstOrNull() ?: base)
+        val base = candidates(8).firstOrNull() ?: return
+        val reading = Kana.toHira(base)
+        val converted = conversion.candidates(reading, 30).firstOrNull { it != reading }
+        choose(converted ?: base)
     }
 
     private fun enter() {
