@@ -1,5 +1,7 @@
 package com.example.kanaflick
 
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.res.Configuration
@@ -14,8 +16,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
-import java.io.File
 import android.widget.*
+import java.io.File
 
 class Th(val bg: Int, val key: Int, val alt: Int, val text: Int, val sub: Int, val acc: Int)
 
@@ -34,6 +36,10 @@ class FlickIME : InputMethodService() {
     private var shift = false
     private var symPage = 0
     private var expanded = false
+    private var panel = 0                // 0=keyboard, 1=clipboard, 2=kaomoji
+    private var suggestionPool = emptyList<String>()
+    private var suggestionCursor = 0
+    private var currentKaomojiCategory = 0
     private val dm get() = resources.displayMetrics
     private val MP = ViewGroup.LayoutParams.MATCH_PARENT
     private fun dp(v: Int) = (v * dm.density).toInt()
@@ -43,21 +49,29 @@ class FlickIME : InputMethodService() {
         if (k?.startsWith("f_") != true && ::bar.isInitialized) setInputView(buildRoot())
     }
 
-    override fun onCreate() { super.onCreate(); prefs = Prefs(this); dict = Dictionary(this, prefs); prefs.listen(prefL) }
+    override fun onCreate() {
+        super.onCreate()
+        prefs = Prefs(this)
+        dict = Dictionary(this, prefs)
+        prefs.listen(prefL)
+    }
     override fun onCreateInputView(): View = buildRoot()
 
     override fun onStartInputView(info: EditorInfo, restarting: Boolean) {
         super.onStartInputView(info, restarting)
-        if (restarting) return
-        comp.setLength(0); rom.setLength(0); expanded = false; shift = false
-        val cls = info.inputType and InputType.TYPE_MASK_CLASS
-        val v = info.inputType and InputType.TYPE_MASK_VARIATION
-        val plain = listOf(InputType.TYPE_TEXT_VARIATION_PASSWORD, InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
-            InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD, InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
-            InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS, InputType.TYPE_TEXT_VARIATION_URI)
-        if (cls == InputType.TYPE_CLASS_NUMBER || cls == InputType.TYPE_CLASS_PHONE) { mode = 2; symPage = 0 }
-        else if (cls == InputType.TYPE_CLASS_TEXT && v in plain) { mode = 1; jp = false }
-        else { mode = 0; jp = true }
+        if (!restarting) {
+            comp.setLength(0); rom.setLength(0); expanded = false; shift = false; panel = 0
+            suggestionPool = emptyList(); suggestionCursor = 0; currentKaomojiCategory = 0
+            val cls = info.inputType and InputType.TYPE_MASK_CLASS
+            val v = info.inputType and InputType.TYPE_MASK_VARIATION
+            val plain = listOf(InputType.TYPE_TEXT_VARIATION_PASSWORD, InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
+                InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD, InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
+                InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS, InputType.TYPE_TEXT_VARIATION_URI)
+            if (cls == InputType.TYPE_CLASS_NUMBER || cls == InputType.TYPE_CLASS_PHONE) { mode = 2; symPage = 0 }
+            else if (cls == InputType.TYPE_CLASS_TEXT && v in plain) { mode = 1; jp = false }
+            else { mode = 0; jp = true }
+        }
+        syncClipboardFromSystem()
         setInputView(buildRoot())
     }
 
@@ -89,6 +103,14 @@ class FlickIME : InputMethodService() {
         sv.addView(bar, ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)))
         expBtn = barBtn("▾") { toggleExpand() }
         barRow.addView(sv, LinearLayout.LayoutParams(0, dp(44), 1f))
+        barRow.addView(barBtn("✂") {
+            panel = if (panel == 1) 0 else 1
+            showMode()
+        }, LinearLayout.LayoutParams(dp(44), dp(44)))
+        barRow.addView(barBtn("☺") {
+            panel = if (panel == 2) 0 else 2
+            showMode()
+        }, LinearLayout.LayoutParams(dp(44), dp(44)))
         if (!prefs.hidden("globe")) barRow.addView(barBtn("🌐") {
             (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker()
         }, LinearLayout.LayoutParams(dp(44), dp(44)))
@@ -99,8 +121,7 @@ class FlickIME : InputMethodService() {
         content = FrameLayout(this)
         root.addView(barRow, LinearLayout.LayoutParams(MP, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(content, LinearLayout.LayoutParams(MP, dp(prefs.keyH * 4 + 8)))
-        showMode(); updateBar()
-        return root
+        showMode(); updateBar(); return root
     }
 
     private fun barBtn(t: String, f: () -> Unit) = TextView(this).apply {
@@ -115,7 +136,12 @@ class FlickIME : InputMethodService() {
 
     private fun showMode() {
         content.removeAllViews()
-        val v = if (expanded) expandView() else when (mode) { 0 -> kanaView(); 1 -> qwertyView(); 2 -> symView(); else -> emojiView() }
+        val v = when {
+            panel == 1 -> clipboardView()
+            panel == 2 -> kaomojiView()
+            expanded -> expandView()
+            else -> when (mode) { 0 -> kanaView(); 1 -> qwertyView(); 2 -> symView(); else -> emojiView() }
+        }
         content.addView(v, FrameLayout.LayoutParams(MP, MP))
     }
 
@@ -152,11 +178,12 @@ class FlickIME : InputMethodService() {
             val pos = if (i < 9) Pair(1 + i % 3, i / 3) else if (i == 9) Pair(2, 3) else Pair(3, 3)
             add(v, pos.first, pos.second)
         }
-        add(kv("😀", 1, true) { mode = 3; showMode() }, 0, 0)
-        add(kv("☆123", 1, true) { mode = 2; symPage = 0; showMode() }, 0, 1)
+        add(kv("😀", 1, true) { mode = 3; panel = 0; showMode() }, 0, 0)
+        add(kv("✂", 1, true) { panel = 1; showMode() }, 0, 1)
         add(kv(if (kata) "あ" else "ア", 1, true) { kata = !kata; showMode() }, 0, 2)
         add(kv("ABC", 1, true) { mode = 1; showMode() }, 0, 3)
-        add(kv("小゛゜", 1, true) { modify() }, 1, 3)
+        add(kv("☺", 1, true) { panel = 2; showMode() }, 1, 3)
+        add(kv("小゛゜", 1, true) { modify() }, 2, 3)
         add(kv("⌫", 1, true, true) { backspace() }, 4, 0)
         add(kv("␣", 1, true) { space() }, 4, 1)
         add(kv("⏎", 2, true) { enter() }, 4, 2, 2)
@@ -179,8 +206,6 @@ class FlickIME : InputMethodService() {
 
     private fun keys(s: String, f: (Char) -> Unit, upper: Boolean = false) =
         s.map { ch -> Pair<View, Float>(kv(if (upper) ch.uppercase() else ch.toString()) { f(ch) }, 1f) }.toTypedArray()
-
-    private fun bottom(vararg extra: Pair<View, Float>): LinearLayout = rowOf(*extra)
 
     private fun qwertyView(): View {
         val sp = Pair<View, Float>(View(this), 0.5f)
@@ -214,8 +239,8 @@ class FlickIME : InputMethodService() {
     }
 
     private val emoji = ("😀 😃 😄 😁 😆 😅 😂 🤣 😊 😇 🙂 😉 😍 🥰 😘 😋 😛 😜 🤪 😎 🤩 🥳 😏 😒 😞 😔 😟 😕 🙁 😣 😖 😫 " +
-        "😩 🥺 😢 😭 😤 😠 😡 🤯 😳 🥵 🥶 😱 😨 😰 😓 🤗 🤔 🤭 🤫 🙄 😬 😴 🤤 😷 🤒 🤕 🤢 🥴 😵 🤠 👍 👎 👏 🙌 🙏 💪 👋 " +
-        "👌 ❤️ 🧡 💛 💚 💙 💜 🖤 💔 ✨ 🔥 ⭐ 🌸 🎉 🎌 🍣 🍜 🍙 🐱 🐶 🌈 ☀️ 🌙").split(" ")
+        "😩 🥺 😢 😭 😤 😠 😡 🤯 😳 🥵 🥶 😱 😨 😰 😓 🤗 🤔 🤭 🤫 🙄 😬 😴 🤤 😷 🤒 🤕 🤢 🥴 😵 🤠 👍 👎 👏 🙌 🙏 💪 👋 🤝 ✨ 🔥 ⭐ 🌸 🎉 🎌 " +
+        "🍣 🍜 🍙 🐱 🐶 🐼 🐰 🦊 🐵 🐻 🌈 ☀️ 🌙 🌊 🚀 🧳 🧠 💡 💊 🧸 🧁 🍰 🍕 🍔 🍟 🥐 🥨 🍦 🍉 🍓 🍇 🥝 🥑 🍋 🍊 🍍 🥥 🥭").split(" ")
 
     private fun emojiView(): View {
         val sv = ScrollView(this)
@@ -235,6 +260,124 @@ class FlickIME : InputMethodService() {
             Pair(kv("⌫", 1, true, true) { backspace() }, 1f))
         l.addView(b, LinearLayout.LayoutParams(MP, dp(prefs.keyH)))
         return l
+    }
+
+    private val kaomojiCategories = listOf(
+        "Happy" to listOf("(＾▽＾)", "(≧◡≦)", "ヽ(・∀・)ノ", "(*´∀`*)"),
+        "Sad" to listOf("(╥﹏╥)", "(T_T)", "(；ω；)", "（´д｀）"),
+        "Love" to listOf("(♡˙︶˙♡)", "(´｡• ᵕ •｡`)", "(♥o♥)", "(*´ω`*)"),
+        "Angry" to listOf("(╬ Ò﹏Ó)", "(╯°□°）╯︵ ┻━┻", "(￣ヘ￣)", "( •̀ ω •́ )"),
+        "Cute" to listOf("(｡♥‿♥｡)", "(≧◡≦)", "(✿◠‿◠)", "(◕‿◕)"),
+        "Shrug" to listOf("¯\\(ツ)/¯", "ヽ(￣д￣;)ノ", "┐(￣ー￣)┌", "¯\\_(ツ)_/¯"),
+        "Other" to listOf("(☞ﾟヮﾟ)☞", "(ﾉ◕ヮ◕)ﾉ", "（￣▽￣）", "(☼◡☼)")
+    )
+
+    private fun kaomojiView(): View {
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val catRow = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
+        val categories = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        kaomojiCategories.forEachIndexed { index, (title, _) ->
+            val btn = TextView(this).apply {
+                text = title
+                textSize = 14f
+                setTextColor(if (index == currentKaomojiCategory) th.acc else th.text)
+                gravity = Gravity.CENTER
+                background = GradientDrawable().apply { cornerRadius = dp(10).toFloat(); setColor(if (index == currentKaomojiCategory) th.alt else th.key) }
+                setPadding(dp(12), dp(8), dp(12), dp(8))
+                setOnClickListener {
+                    currentKaomojiCategory = index
+                    showMode()
+                }
+            }
+            categories.addView(btn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) })
+        }
+        catRow.addView(categories)
+        root.addView(catRow, LinearLayout.LayoutParams(MP, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        val grid = GridLayout(this).apply { columnCount = 3; setPadding(dp(8), dp(8), dp(8), dp(8)) }
+        val current = kaomojiCategories.getOrNull(currentKaomojiCategory)?.second ?: emptyList()
+        current.forEach { kaomoji ->
+            val t = TextView(this).apply {
+                text = kaomoji; textSize = 19f; gravity = Gravity.CENTER
+                setPadding(dp(8), dp(8), dp(8), dp(8))
+                background = GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(th.alt) }
+                setOnClickListener {
+                    currentInputConnection?.commitText(kaomoji, 1)
+                    panel = 0; showMode()
+                }
+            }
+            val lp = GridLayout.LayoutParams().apply {
+                width = 0
+                height = dp(56)
+                columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
+                setMargins(dp(4), dp(4), dp(4), dp(4))
+            }
+            grid.addView(t, lp)
+        }
+        val scroller = ScrollView(this)
+        scroller.addView(grid)
+        root.addView(scroller, LinearLayout.LayoutParams(MP, 0, 1f))
+
+        val footer = rowOf(
+            Pair(kv("あ", 1, true) { mode = 0; panel = 0; showMode() }, 1f),
+            Pair(kv("✂", 1, true) { panel = 1; showMode() }, 1f),
+            Pair(kv("⌫", 1, true, true) { backspace() }, 1f)
+        )
+        root.addView(footer, LinearLayout.LayoutParams(MP, dp(prefs.keyH)))
+        return root
+    }
+
+    private fun clipboardView(): View {
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val items = prefs.clipboardEntries()
+        val inner = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), dp(8), dp(8), dp(8)) }
+        if (items.isEmpty()) {
+            val empty = TextView(this).apply {
+                text = "Clipboard is empty"
+                textSize = 16f
+                setTextColor(th.sub)
+                gravity = Gravity.CENTER
+            }
+            inner.addView(empty, LinearLayout.LayoutParams(MP, dp(48)))
+        } else {
+            items.forEach { entry ->
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                val text = TextView(this).apply {
+                    text = entry
+                    textSize = 16f
+                    maxLines = 2
+                    setTextColor(th.text)
+                    setOnClickListener {
+                        currentInputConnection?.commitText(entry, 1)
+                        panel = 0; showMode()
+                    }
+                }
+                val remove = TextView(this).apply {
+                    text = "✕"
+                    textSize = 18f
+                    setTextColor(th.acc)
+                    setPadding(dp(12), dp(8), dp(12), dp(8))
+                    setOnClickListener {
+                        prefs.removeClipboardEntry(entry)
+                        showMode()
+                    }
+                }
+                row.addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                row.addView(remove)
+                inner.addView(row, LinearLayout.LayoutParams(MP, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(6), 0, dp(6)) })
+            }
+        }
+
+        val sv = ScrollView(this)
+        sv.addView(inner)
+        root.addView(sv, LinearLayout.LayoutParams(MP, 0, 1f))
+        val footer = rowOf(
+            Pair(kv("あ", 1, true) { mode = 0; panel = 0; showMode() }, 1f),
+            Pair(kv("✕", 1, true) { prefs.clearClipboard(); showMode() }, 1f),
+            Pair(kv("⌫", 1, true, true) { backspace() }, 1f)
+        )
+        root.addView(footer, LinearLayout.LayoutParams(MP, dp(prefs.keyH)))
+        return root
     }
 
     private fun expandView(): View {
@@ -267,28 +410,46 @@ class FlickIME : InputMethodService() {
         if (cs.isEmpty() && expanded) { expanded = false; expBtn.text = "▾"; showMode() }
     }
 
+    private fun currentComposingText(): String {
+        if (comp.isEmpty() && rom.isEmpty()) return ""
+        val pending = rom.toString()
+        val needsN = pending == "n" || pending == "nn"
+        if (pending.isNotEmpty() && !needsN) return comp.toString() + pending
+        return comp.toString() + if (needsN) "ん" else ""
+    }
+
     /** Order: as typed, hiragana, katakana, dictionary kanji/words, then predictions. */
     private fun candidates(extra: Int): List<String> {
-        if (comp.isEmpty() && rom.isEmpty()) return emptyList()
-        val pend = rom.toString()
-        val n = pend == "n" || pend == "nn"
-        if (pend.isNotEmpty() && !n) return listOf(comp.toString() + pend)
-        val base = comp.toString() + (if (n) "ん" else "")
-        if (base.isEmpty()) return emptyList()
-        val r = Kana.toHira(base)
+        val source = currentComposingText()
+        if (source.isEmpty()) return emptyList()
+        val limit = maxOf(extra, 8)
+        val base = Kana.toHira(source)
         val s = LinkedHashSet<String>()
-        s.add(base); s.add(r); s.add(Kana.toKata(base))
-        s.addAll(dict.exact(r)); s.addAll(dict.predict(r, extra))
-        return s.toList()
+        s.add(source)
+        s.add(base)
+        s.add(Kana.toKata(base))
+        s.addAll(dict.exact(base))
+        s.addAll(dict.predict(base, limit))
+        s.addAll(JapaneseConverter(dict, prefs).buildCandidates(source, limit))
+        return s.filter { it.isNotBlank() }.sortedByDescending { it.length }.take(limit)
     }
 
     private fun choose(w: String) {
         val ic = currentInputConnection ?: return
         ic.commitText(w, 1)
         if (dict.has(w)) prefs.bump(w)
+        prefs.addClipboardEntry(w)
         comp.setLength(0); rom.setLength(0)
+        suggestionPool = emptyList(); suggestionCursor = 0
         if (expanded) { expanded = false; expBtn.text = "▾"; showMode() }
+        if (panel != 0) { panel = 0; showMode() }
         updateBar()
+    }
+
+    private fun syncClipboardFromSystem() {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+        val item = clipboard.primaryClip?.getItemAt(0)?.text?.toString() ?: return
+        if (item.isNotBlank()) prefs.addClipboardEntry(item)
     }
 
     // ---------- input logic ----------
@@ -351,9 +512,14 @@ class FlickIME : InputMethodService() {
     }
 
     private fun space() {
+        if (panel != 0) { panel = 0; showMode(); return }
         if (comp.isEmpty() && rom.isEmpty()) { currentInputConnection?.commitText(" ", 1); return }
-        val base = candidates(0).firstOrNull() ?: return
-        choose(dict.exact(Kana.toHira(base)).firstOrNull() ?: base)
+        val list = candidates(8)
+        if (list.isEmpty()) { currentInputConnection?.commitText(" ", 1); return }
+        val index = if (suggestionPool == list && suggestionPool.isNotEmpty()) suggestionCursor % list.size else 0
+        suggestionPool = list
+        suggestionCursor = (index + 1) % list.size
+        choose(list[index])
     }
 
     private fun enter() {
