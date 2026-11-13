@@ -15,15 +15,18 @@ android {
         versionCode = 1
         versionName = "1.0"
     }
+
     sourceSets {
         getByName("main") {
-            manifest.srcFile("AndroidManifest.xml")
-            java.srcDirs("java")
-            assets.srcDirs("assets")
-            jniLibs.srcDirs("jniLibs")
-            res.srcDirs("res")
+            manifest.srcFile("src/main/AndroidManifest.xml")
+            java.srcDirs("src/main/java")
+            proto.srcDirs("src/main/proto")
+            assets.srcDirs("src/main/assets")
+            jniLibs.srcDirs("src/main/jniLibs")
+            res.srcDirs("src/main/res")
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
