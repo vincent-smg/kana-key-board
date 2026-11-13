@@ -22,6 +22,10 @@ class Th(val bg: Int, val key: Int, val alt: Int, val text: Int, val sub: Int, v
 class FlickIME : InputMethodService() {
     private lateinit var prefs: Prefs
     private lateinit var dict: Dictionary
+    private lateinit var conversion: JapaneseConversionManager
+    private lateinit var suggestionManager: SuggestionManager
+    private lateinit var clipboardHistory: ClipboardHistoryManager
+    private lateinit var kaomojiManager: KaomojiManager
     private lateinit var th: Th
     private lateinit var bar: LinearLayout
     private lateinit var content: FrameLayout
@@ -34,6 +38,9 @@ class FlickIME : InputMethodService() {
     private var shift = false
     private var symPage = 0
     private var expanded = false
+    private var returnMode = 0
+    private var kaomojiCategory = "Happy"
+    private var clipboardAllowed = true
     private val dm get() = resources.displayMetrics
     private val MP = ViewGroup.LayoutParams.MATCH_PARENT
     private fun dp(v: Int) = (v * dm.density).toInt()
@@ -43,25 +50,54 @@ class FlickIME : InputMethodService() {
         if (k?.startsWith("f_") != true && ::bar.isInitialized) setInputView(buildRoot())
     }
 
-    override fun onCreate() { super.onCreate(); prefs = Prefs(this); dict = Dictionary(this, prefs); prefs.listen(prefL) }
+    override fun onCreate() {
+        super.onCreate()
+        prefs = Prefs(this)
+        dict = Dictionary(this, prefs)
+        conversion = JapaneseConversionManager(dict)
+        suggestionManager = SuggestionManager(conversion)
+        clipboardHistory = ClipboardHistoryManager(this) {
+            Toast.makeText(this, "Clipboard access is unavailable", Toast.LENGTH_SHORT).show()
+        }
+        kaomojiManager = KaomojiManager(this)
+        prefs.listen(prefL)
+    }
     override fun onCreateInputView(): View = buildRoot()
 
     override fun onStartInputView(info: EditorInfo, restarting: Boolean) {
         super.onStartInputView(info, restarting)
-        if (restarting) return
-        comp.setLength(0); rom.setLength(0); expanded = false; shift = false
         val cls = info.inputType and InputType.TYPE_MASK_CLASS
         val v = info.inputType and InputType.TYPE_MASK_VARIATION
         val plain = listOf(InputType.TYPE_TEXT_VARIATION_PASSWORD, InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
             InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD, InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
             InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS, InputType.TYPE_TEXT_VARIATION_URI)
+        val previousClipboardAllowed = clipboardAllowed
+        clipboardAllowed = cls == InputType.TYPE_CLASS_TEXT && v !in plain
+        if (cls == InputType.TYPE_CLASS_NUMBER || cls == InputType.TYPE_CLASS_PHONE) clipboardAllowed = false
+        if (clipboardAllowed) clipboardHistory.startObserving() else clipboardHistory.stopObserving()
+        if (restarting) {
+            if (previousClipboardAllowed != clipboardAllowed && ::bar.isInitialized) setInputView(buildRoot())
+            return
+        }
+
+        comp.setLength(0); rom.setLength(0); expanded = false; shift = false
         if (cls == InputType.TYPE_CLASS_NUMBER || cls == InputType.TYPE_CLASS_PHONE) { mode = 2; symPage = 0 }
         else if (cls == InputType.TYPE_CLASS_TEXT && v in plain) { mode = 1; jp = false }
         else { mode = 0; jp = true }
+        returnMode = mode
         setInputView(buildRoot())
     }
 
-    override fun onFinishInputView(finishingInput: Boolean) { commitAll(); super.onFinishInputView(finishingInput) }
+    override fun onFinishInputView(finishingInput: Boolean) {
+        clipboardHistory.stopObserving()
+        commitAll()
+        super.onFinishInputView(finishingInput)
+    }
+
+    override fun onDestroy() {
+        clipboardHistory.stopObserving()
+        super.onDestroy()
+    }
 
     override fun onUpdateSelection(os: Int, oe: Int, ns: Int, ne: Int, cs: Int, ce: Int) {
         super.onUpdateSelection(os, oe, ns, ne, cs, ce)
@@ -89,6 +125,21 @@ class FlickIME : InputMethodService() {
         sv.addView(bar, ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)))
         expBtn = barBtn("▾") { toggleExpand() }
         barRow.addView(sv, LinearLayout.LayoutParams(0, dp(44), 1f))
+        if (clipboardAllowed) barRow.addView(barBtn("📋") {
+            if (mode != 4 && mode != 5) returnMode = mode
+            clipboardHistory.refreshFromSystemClipboard()
+            mode = 4
+            expanded = false
+            expBtn.text = "▾"
+            showMode()
+        }, LinearLayout.LayoutParams(dp(40), dp(44)))
+        barRow.addView(barBtn("☺") {
+            if (mode != 4 && mode != 5) returnMode = mode
+            mode = 5
+            expanded = false
+            expBtn.text = "▾"
+            showMode()
+        }, LinearLayout.LayoutParams(dp(40), dp(44)))
         if (!prefs.hidden("globe")) barRow.addView(barBtn("🌐") {
             (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker()
         }, LinearLayout.LayoutParams(dp(44), dp(44)))
@@ -115,8 +166,20 @@ class FlickIME : InputMethodService() {
 
     private fun showMode() {
         content.removeAllViews()
-        val v = if (expanded) expandView() else when (mode) { 0 -> kanaView(); 1 -> qwertyView(); 2 -> symView(); else -> emojiView() }
+        val v = if (expanded) expandView() else when (mode) {
+            0 -> kanaView()
+            1 -> qwertyView()
+            2 -> symView()
+            3 -> emojiView()
+            4 -> clipboardView()
+            else -> kaomojiView()
+        }
         content.addView(v, FrameLayout.LayoutParams(MP, MP))
+    }
+
+    private fun closePanel() {
+        mode = returnMode
+        showMode()
     }
 
     private fun toggleExpand() {
@@ -152,7 +215,7 @@ class FlickIME : InputMethodService() {
             val pos = if (i < 9) Pair(1 + i % 3, i / 3) else if (i == 9) Pair(2, 3) else Pair(3, 3)
             add(v, pos.first, pos.second)
         }
-        add(kv("😀", 1, true) { mode = 3; showMode() }, 0, 0)
+        add(kv("😀", 1, true) { returnMode = mode; mode = 3; showMode() }, 0, 0)
         add(kv("☆123", 1, true) { mode = 2; symPage = 0; showMode() }, 0, 1)
         add(kv(if (kata) "あ" else "ア", 1, true) { kata = !kata; showMode() }, 0, 2)
         add(kv("ABC", 1, true) { mode = 1; showMode() }, 0, 3)
@@ -230,11 +293,112 @@ class FlickIME : InputMethodService() {
         sv.addView(g)
         val l = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         l.addView(sv, LinearLayout.LayoutParams(MP, 0, 1f))
-        val b = rowOf(Pair(kv("あ", 1, true) { mode = 0; showMode() }, 1f),
+        val b = rowOf(Pair(kv("あ", 1, true) { closePanel() }, 1f),
+            Pair(kv("☺", 1, true) { mode = 5; kaomojiCategory = "Happy"; showMode() }, 1f),
             Pair(kv("ABC", 1, true) { mode = 1; showMode() }, 1f),
             Pair(kv("⌫", 1, true, true) { backspace() }, 1f))
         l.addView(b, LinearLayout.LayoutParams(MP, dp(prefs.keyH)))
         return l
+    }
+
+    private fun clipboardView(): View {
+        val outer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(6), dp(4), dp(6), dp(4)) }
+        val actions = rowOf(
+            Pair(barBtn("Keyboard") { closePanel() }, 1f),
+            Pair(barBtn("Clear history") { clipboardHistory.clearHistory(); showMode() }, 1f)
+        )
+        outer.addView(actions, LinearLayout.LayoutParams(MP, dp(42)))
+
+        val scroll = ScrollView(this)
+        val entries = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        clipboardHistory.entries().forEach { entry ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            val value = TextView(this).apply {
+                text = entry.text
+                textSize = 16f
+                setTextColor(th.text)
+                setPadding(dp(10), dp(8), dp(6), dp(8))
+                maxLines = 2
+                setOnClickListener {
+                    commitAll()
+                    currentInputConnection?.commitText(entry.text, 1)
+                    closePanel()
+                }
+            }
+            row.addView(value, LinearLayout.LayoutParams(0, MP, 1f))
+            row.addView(barBtn(if (entry.pinned) "★" else "☆") {
+                clipboardHistory.togglePinned(entry.text)
+                showMode()
+            }, LinearLayout.LayoutParams(dp(40), dp(44)))
+            row.addView(barBtn("×") {
+                clipboardHistory.delete(entry.text)
+                showMode()
+            }, LinearLayout.LayoutParams(dp(40), dp(44)))
+            entries.addView(row, LinearLayout.LayoutParams(MP, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        if (entries.childCount == 0) {
+            entries.addView(TextView(this).apply {
+                text = "No copied text"
+                textSize = 16f
+                gravity = Gravity.CENTER
+                setTextColor(th.sub)
+            }, LinearLayout.LayoutParams(MP, dp(72)))
+        }
+        scroll.addView(entries)
+        outer.addView(scroll, LinearLayout.LayoutParams(MP, 0, 1f))
+        return outer
+    }
+
+    private fun kaomojiView(): View {
+        val outer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(4), dp(2), dp(4), dp(2)) }
+        val categoryScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
+        val categories = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val names = listOf("Favorites") + kaomojiManager.categories.keys
+        names.forEach { name ->
+            categories.addView(barBtn(if (name == kaomojiCategory) "[$name]" else name) {
+                kaomojiCategory = name
+                showMode()
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)))
+        }
+        categoryScroll.addView(categories)
+        outer.addView(categoryScroll, LinearLayout.LayoutParams(MP, dp(40)))
+
+        val values = if (kaomojiCategory == "Favorites") kaomojiManager.favorites().toList()
+            else kaomojiManager.categories[kaomojiCategory].orEmpty()
+        val scroll = ScrollView(this)
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        values.forEach { face ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            row.addView(TextView(this).apply {
+                text = face
+                textSize = 20f
+                gravity = Gravity.CENTER
+                setTextColor(th.text)
+                setOnClickListener {
+                    commitAll()
+                    currentInputConnection?.commitText(face, 1)
+                }
+            }, LinearLayout.LayoutParams(0, dp(48), 1f))
+            row.addView(barBtn(if (face in kaomojiManager.favorites()) "★" else "☆") {
+                kaomojiManager.toggleFavorite(face)
+                showMode()
+            }, LinearLayout.LayoutParams(dp(48), dp(48)))
+            list.addView(row, LinearLayout.LayoutParams(MP, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        if (values.isEmpty()) {
+            list.addView(TextView(this).apply {
+                text = "No kaomoji in this category"
+                gravity = Gravity.CENTER
+                setTextColor(th.sub)
+            }, LinearLayout.LayoutParams(MP, dp(72)))
+        }
+        scroll.addView(list)
+        outer.addView(scroll, LinearLayout.LayoutParams(MP, 0, 1f))
+        outer.addView(rowOf(
+            Pair(barBtn("Keyboard") { closePanel() }, 1f),
+            Pair(barBtn("ABC") { mode = 1; showMode() }, 1f)
+        ), LinearLayout.LayoutParams(MP, dp(prefs.keyH)))
+        return outer
     }
 
     private fun expandView(): View {
@@ -269,17 +433,7 @@ class FlickIME : InputMethodService() {
 
     /** Order: as typed, hiragana, katakana, dictionary kanji/words, then predictions. */
     private fun candidates(extra: Int): List<String> {
-        if (comp.isEmpty() && rom.isEmpty()) return emptyList()
-        val pend = rom.toString()
-        val n = pend == "n" || pend == "nn"
-        if (pend.isNotEmpty() && !n) return listOf(comp.toString() + pend)
-        val base = comp.toString() + (if (n) "ん" else "")
-        if (base.isEmpty()) return emptyList()
-        val r = Kana.toHira(base)
-        val s = LinkedHashSet<String>()
-        s.add(base); s.add(r); s.add(Kana.toKata(base))
-        s.addAll(dict.exact(r)); s.addAll(dict.predict(r, extra))
-        return s.toList()
+        return suggestionManager.suggestions(comp.toString(), rom.toString(), extra)
     }
 
     private fun choose(w: String) {
