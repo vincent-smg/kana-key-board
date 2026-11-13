@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
 
     steps:
@@ -18,28 +18,23 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
-
-      - name: Set up Gradle 8.7
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.7'
+          java-version: "17"
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
           packages: platform-tools
 
-      - name: Install Android SDK
+      - name: Install Android SDK packages
         run: |
           sdkmanager --install "platforms;android-34" "build-tools;34.0.0"
 
-      - name: Set up Python and Bazelisk
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install Bazelisk
+      - name: Set up Go and Bazelisk
         uses: actions/setup-go@v5
         with:
           go-version: "1.23"
@@ -56,26 +51,29 @@ jobs:
         working-directory: mocz/mozc-master/src
         run: python3 build_tools/update_deps.py
 
-      - name: Build and stage Mozc native libraries and data
+      - name: Build Mozc and stage app assets
         working-directory: mocz/mozc-master/src
         run: |
           bazelisk build --config oss_android package --config release_build \
             //android/jni:native_libs
           bazelisk build --config oss_linux --config release_build \
             //data_manager/oss:mozc_dataset_for_oss
+
           mkdir -p "$GITHUB_WORKSPACE/app/main/jniLibs" "$GITHUB_WORKSPACE/app/main/assets"
           unzip -q bazel-bin/android/jni/native_libs.zip -d /tmp/mozc-native
+
           for abi in arm64-v8a armeabi-v7a x86 x86_64; do
             test -s "/tmp/mozc-native/libs/$abi/libmozc.so"
             mkdir -p "$GITHUB_WORKSPACE/app/main/jniLibs/$abi"
             cp "/tmp/mozc-native/libs/$abi/libmozc.so" "$GITHUB_WORKSPACE/app/main/jniLibs/$abi/libmozc.so"
           done
+
           test -s bazel-bin/data_manager/oss/mozc.data
           cp bazel-bin/data_manager/oss/mozc.data "$GITHUB_WORKSPACE/app/main/assets/mozc.data"
           cp "$GITHUB_WORKSPACE/mocz/mozc-master/LICENSE" "$GITHUB_WORKSPACE/app/main/assets/MOZC-LICENSE.txt"
 
       - name: Build debug APK
-        run: gradle --no-daemon :app:assembleDebug
+        run: ./gradlew --no-daemon :app:assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
