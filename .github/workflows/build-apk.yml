@@ -7,7 +7,8 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
+    timeout-minutes: 180
 
     steps:
       - name: Check out project
@@ -29,10 +30,9 @@ jobs:
         with:
           packages: platform-tools
 
-      - name: Install Android SDK and NDK
+      - name: Install Android SDK
         run: |
-          sdkmanager --install "platforms;android-34" "platforms;android-35" "build-tools;34.0.0" "ndk;29.0.14206865"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
+          sdkmanager --install "platforms;android-34" "build-tools;34.0.0"
 
       - name: Set up Python and Bazelisk
         uses: actions/setup-python@v5
@@ -54,12 +54,12 @@ jobs:
 
       - name: Install Mozc build dependencies
         working-directory: mocz/mozc-master/src
-        run: python3 build_tools/update_deps.py --nondk
+        run: python3 build_tools/update_deps.py
 
       - name: Build and stage Mozc native libraries and data
         working-directory: mocz/mozc-master/src
         run: |
-          bazelisk build --config oss_android --config release_build \
+          bazelisk build --config oss_android package --config release_build \
             //android/jni:native_libs \
             //data_manager/oss:mozc_dataset_for_oss
           mkdir -p "$GITHUB_WORKSPACE/app/main/jniLibs" "$GITHUB_WORKSPACE/app/main/assets"
