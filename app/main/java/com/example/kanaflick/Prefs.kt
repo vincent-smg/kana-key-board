@@ -40,6 +40,27 @@ class Prefs(ctx: Context) {
     fun freq(w: String) = p.getInt("f_$w", 0)
     fun bump(w: String) { p.edit().putInt("f_$w", freq(w) + 1).apply() }
 
+    fun clipboardEntries(): MutableList<String> {
+        val raw = p.getString("clipboard", "") ?: ""
+        return raw.split("\n").map { it.trim() }.filter { it.isNotEmpty() }.toMutableList()
+    }
+
+    fun addClipboardEntry(text: String) {
+        val value = text.trim()
+        if (value.isEmpty()) return
+        val entries = clipboardEntries().filter { it != value }.toMutableList()
+        entries.add(0, value)
+        while (entries.size > 20) entries.removeAt(entries.lastIndex)
+        p.edit().putString("clipboard", entries.joinToString("\n")).apply()
+    }
+
+    fun removeClipboardEntry(text: String) {
+        val entries = clipboardEntries().filter { it != text }
+        p.edit().putString("clipboard", entries.joinToString("\n")).apply()
+    }
+
+    fun clearClipboard() = p.edit().remove("clipboard").apply()
+
     fun parse(s: String): Int? {
         var h = s.trim().removePrefix("#")
         if (!Regex("[0-9a-fA-F]{6}|[0-9a-fA-F]{8}").matches(h)) return null
