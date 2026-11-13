@@ -1,0 +1,80 @@
+name: Build Mozc Android native libraries
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - "mocz/mozc-master.zip"
+      - ".github/workflows/build-mozc-android.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out project
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android NDK
+        run: |
+          sdkmanager --install "platforms;android-35" "ndk;29.0.14206865"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
+
+      - name: Set up Bazelisk
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Install Bazelisk
+        run: |
+          go install github.com/bazelbuild/bazelisk@v1.25.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Extract Mozc source
+        run: unzip -q mocz/mozc-master.zip -d mocz
+
+      - name: Install build dependencies
+        working-directory: mocz/mozc-master/src
+        run: python3 build_tools/update_deps.py --nondk
+
+      - name: Build Android native libraries and engine data
+        working-directory: mocz/mozc-master/src
+        run: |
+          bazelisk build --config oss_android --config release_build \
+            //android/jni:native_libs \
+            //data_manager/oss:mozc_dataset_for_oss
+
+      - name: Package Mozc integration files
+        run: |
+          mkdir -p artifacts/mozc/jniLibs artifacts/mozc/assets
+          unzip -q mocz/mozc-master/src/bazel-bin/android/jni/native_libs.zip -d artifacts/native
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            test -s "artifacts/native/libs/$abi/libmozc.so"
+            mkdir -p "artifacts/mozc/jniLibs/$abi"
+            cp "artifacts/native/libs/$abi/libmozc.so" "artifacts/mozc/jniLibs/$abi/libmozc.so"
+          done
+          test -s mocz/mozc-master/src/bazel-bin/data_manager/oss/mozc.data
+          cp mocz/mozc-master/src/bazel-bin/data_manager/oss/mozc.data artifacts/mozc/assets/mozc.data
+          cp mocz/mozc-master/LICENSE artifacts/mozc/assets/MOZC-LICENSE.txt
+          cd artifacts/mozc
+          zip -q -r ../../mozc-android-integration.zip .
+
+      - name: Upload Mozc integration files
+        uses: actions/upload-artifact@v4
+        with:
+          name: mozc-android-integration
+          path: mozc-android-integration.zip
+          if-no-files-found: error

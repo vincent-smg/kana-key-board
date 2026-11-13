@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("com.google.protobuf")
 }
 
 android {
@@ -18,7 +19,9 @@ android {
         getByName("main") {
             manifest.srcFile("AndroidManifest.xml")
             java.srcDirs("java")
+            proto.srcDirs("proto")
             assets.srcDirs("assets")
+            jniLibs.srcDirs("jniLibs")
             res.srcDirs("res")
         }
     }
@@ -30,4 +33,23 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+}
+
+protobuf {
+    protoc {
+        artifact = "com.google.protobuf:protoc:3.25.3"
+    }
+    generateProtoTasks {
+        all().configureEach {
+            builtins {
+                getByName("java") {
+                    option("lite")
+                }
+            }
+        }
+    }
+}
+
+dependencies {
+    implementation("com.google.protobuf:protobuf-javalite:3.25.3")
 }

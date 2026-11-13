@@ -7,6 +7,8 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.inputmethodservice.InputMethodService
+import android.os.Handler
+import android.os.Looper
 import android.text.InputType
 import android.view.Gravity
 import android.view.KeyEvent
@@ -41,6 +43,8 @@ class FlickIME : InputMethodService() {
     private var returnMode = 0
     private var kaomojiCategory = "Happy"
     private var clipboardAllowed = true
+    private var serviceDestroyed = false
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val dm get() = resources.displayMetrics
     private val MP = ViewGroup.LayoutParams.MATCH_PARENT
     private fun dp(v: Int) = (v * dm.density).toInt()
@@ -52,9 +56,14 @@ class FlickIME : InputMethodService() {
 
     override fun onCreate() {
         super.onCreate()
+        serviceDestroyed = false
         prefs = Prefs(this)
         dict = Dictionary(this, prefs)
-        conversion = JapaneseConversionManager(dict)
+        conversion = JapaneseConversionManager(this, dict) {
+            mainHandler.post {
+                if (!serviceDestroyed && ::bar.isInitialized) updateBar()
+            }
+        }
         suggestionManager = SuggestionManager(conversion)
         clipboardHistory = ClipboardHistoryManager(this) {
             Toast.makeText(this, "Clipboard access is unavailable", Toast.LENGTH_SHORT).show()
@@ -99,7 +108,9 @@ class FlickIME : InputMethodService() {
     }
 
     override fun onDestroy() {
+        serviceDestroyed = true
         clipboardHistory.stopObserving()
+        conversion.close()
         super.onDestroy()
     }
 
@@ -511,6 +522,10 @@ class FlickIME : InputMethodService() {
         if (comp.isEmpty() && rom.isEmpty()) { currentInputConnection?.commitText(" ", 1); return }
         val base = candidates(8).firstOrNull() ?: return
         val reading = Kana.toHira(base)
+        if (!conversion.hasMozcResult(reading)) {
+            updateBar()
+            return
+        }
         val converted = conversion.candidates(reading, 30).firstOrNull { it != reading }
         choose(converted ?: base)
     }

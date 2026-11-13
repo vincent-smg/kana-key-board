@@ -29,9 +29,49 @@ jobs:
         with:
           packages: platform-tools
 
-      - name: Install Android 34 SDK
+      - name: Install Android SDK and NDK
         run: |
-          sdkmanager --install "platforms;android-34" "build-tools;34.0.0"
+          sdkmanager --install "platforms;android-34" "platforms;android-35" "build-tools;34.0.0" "ndk;29.0.14206865"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
+
+      - name: Set up Python and Bazelisk
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Bazelisk
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Add Bazelisk to PATH
+        run: |
+          go install github.com/bazelbuild/bazelisk@v1.25.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Extract Mozc source
+        run: unzip -q mocz/mozc-master.zip -d mocz
+
+      - name: Install Mozc build dependencies
+        working-directory: mocz/mozc-master/src
+        run: python3 build_tools/update_deps.py --nondk
+
+      - name: Build and stage Mozc native libraries and data
+        working-directory: mocz/mozc-master/src
+        run: |
+          bazelisk build --config oss_android --config release_build \
+            //android/jni:native_libs \
+            //data_manager/oss:mozc_dataset_for_oss
+          mkdir -p "$GITHUB_WORKSPACE/app/main/jniLibs" "$GITHUB_WORKSPACE/app/main/assets"
+          unzip -q bazel-bin/android/jni/native_libs.zip -d /tmp/mozc-native
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            test -s "/tmp/mozc-native/libs/$abi/libmozc.so"
+            mkdir -p "$GITHUB_WORKSPACE/app/main/jniLibs/$abi"
+            cp "/tmp/mozc-native/libs/$abi/libmozc.so" "$GITHUB_WORKSPACE/app/main/jniLibs/$abi/libmozc.so"
+          done
+          test -s bazel-bin/data_manager/oss/mozc.data
+          cp bazel-bin/data_manager/oss/mozc.data "$GITHUB_WORKSPACE/app/main/assets/mozc.data"
+          cp "$GITHUB_WORKSPACE/mocz/mozc-master/LICENSE" "$GITHUB_WORKSPACE/app/main/assets/MOZC-LICENSE.txt"
 
       - name: Build debug APK
         run: gradle --no-daemon :app:assembleDebug
