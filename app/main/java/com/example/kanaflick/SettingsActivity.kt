@@ -71,7 +71,7 @@ class SettingsActivity : Activity() {
         text("Use #RRGGBB or with opacity #AARRGGBB (e.g. #80FFFFFF = 50% white; 00 = invisible, FF = solid). Leave empty for the default. Turn on the switch below if you prefer #RRGGBBAA.", 13f)
         switch("Opacity at the end (#RRGGBBAA)", p.alphaLast) { p.alphaLast = it }
         listOf("bg" to "Keyboard background", "key" to "Key (button) color", "func" to "Function key color",
-            "go" to "Enter key / flick highlight color", "text" to "Letter color", "romaji" to "Romaji color").forEach { (k, label) ->
+            "go" to "Enter key / flick highlight color", "flick" to "Flick selection circle", "text" to "Letter color", "romaji" to "Romaji color").forEach { (k, label) ->
             text(label)
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             val et = EditText(this).apply {

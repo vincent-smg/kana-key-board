@@ -1,5 +1,6 @@
 package com.example.kanaflick
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
@@ -10,6 +11,7 @@ import android.util.TypedValue
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import android.view.animation.DecelerateInterpolator
 import kotlin.math.abs
 import kotlin.math.hypot
 
@@ -27,6 +29,10 @@ class KeyView(c: Context, private val prefs: Prefs, private val th: Th) : View(c
     private var sel = 0
     private var sx = 0f
     private var sy = 0f
+    private var highlightX = 0f
+    private var highlightY = 0f
+    private var highlightScale = 1f
+    private var highlightAnimator: ValueAnimator? = null
     private val sub get() = subs.firstOrNull() ?: ""
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val tp = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
@@ -57,19 +63,48 @@ class KeyView(c: Context, private val prefs: Prefs, private val th: Th) : View(c
         } else c.drawText(label, w / 2, h / 2 + big * 0.35f, tp)
     }
 
+    private fun flickPoints(w: Float, h: Float) = listOf(
+        0.5f * w to 0.5f * h,
+        0.13f * w to 0.5f * h,
+        0.5f * w to 0.16f * h,
+        0.87f * w to 0.5f * h,
+        0.5f * w to 0.84f * h
+    )
+
+    private fun animateHighlight(index: Int, w: Float, h: Float) {
+        val (targetX, targetY) = flickPoints(w, h)[index]
+        val startX = if (highlightX == 0f && highlightY == 0f) w / 2f else highlightX
+        val startY = if (highlightX == 0f && highlightY == 0f) h / 2f else highlightY
+        val startScale = highlightScale
+        highlightAnimator?.cancel()
+        highlightAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 125L
+            interpolator = DecelerateInterpolator()
+            addUpdateListener { animation ->
+                val t = animation.animatedValue as Float
+                highlightX = startX + (targetX - startX) * t
+                highlightY = startY + (targetY - startY) * t
+                highlightScale = startScale + (1f - startScale) * t
+                invalidate()
+            }
+            start()
+        }
+    }
+
     private fun drawFlick(c: Canvas, w: Float, h: Float) {
         val big = sp(prefs.kanaSp)
-        val pts = listOf(0.5f to 0.5f, 0.18f to 0.5f, 0.5f to 0.2f, 0.82f to 0.5f, 0.5f to 0.8f)
+        val pts = flickPoints(w, h)
+        // Draw the moving selection circle first so the selected kana remains crisp above it.
+        paint.color = prefs.color("flick") ?: th.acc
+        val radius = dp(12f) * highlightScale
+        c.drawCircle(highlightX.takeIf { it != 0f } ?: w / 2f,
+            highlightY.takeIf { it != 0f } ?: h / 2f, radius, paint)
         for (i in chars.indices) {
-            val (fx, fy) = pts[i]
+            val (x, y) = pts[i]
             val s = if (i == 0) big else big * 0.8f
-            if (i == sel) {
-                paint.color = th.acc
-                c.drawRoundRect(fx * w - s * 0.7f, fy * h - s * 0.7f, fx * w + s * 0.7f, fy * h + s * 0.7f, dp(8f), dp(8f), paint)
-            }
             tp.color = th.text
             tp.textSize = s
-            c.drawText(chars[i], fx * w, fy * h + s * 0.35f, tp)
+            c.drawText(chars[i], x, y + s * 0.35f, tp)
         }
     }
 
@@ -77,6 +112,7 @@ class KeyView(c: Context, private val prefs: Prefs, private val th: Th) : View(c
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 down = true; sel = 0; sx = e.x; sy = e.y
+                highlightX = e.x; highlightY = e.y; highlightScale = 0.72f
                 parent?.requestDisallowInterceptTouchEvent(true)
                 buzz(); invalidate()
                 if (repeat) { pick(0); handler.postDelayed(rep, 400) }
@@ -85,7 +121,12 @@ class KeyView(c: Context, private val prefs: Prefs, private val th: Th) : View(c
                 val dx = e.x - sx; val dy = e.y - sy
                 var s = 0
                 if (hypot(dx, dy) > dp(16f)) s = if (abs(dx) > abs(dy)) (if (dx < 0) 1 else 3) else (if (dy < 0) 2 else 4)
-                if (s != sel) { sel = s; if (s != 0) buzz(); invalidate() }
+                if (s != sel) {
+                    sel = s
+                    if (s != 0) buzz()
+                    animateHighlight(s, width.toFloat(), height.toFloat())
+                    invalidate()
+                }
             }
             MotionEvent.ACTION_UP -> {
                 handler.removeCallbacks(rep)

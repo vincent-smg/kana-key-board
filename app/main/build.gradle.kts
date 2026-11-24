@@ -20,7 +20,6 @@ android {
         getByName("main") {
             manifest.srcFile("src/main/AndroidManifest.xml")
             java.srcDirs("src/main/java")
-            proto.srcDirs("src/main/proto")
             assets.srcDirs("src/main/assets")
             jniLibs.srcDirs("src/main/jniLibs")
             res.srcDirs("src/main/res")
